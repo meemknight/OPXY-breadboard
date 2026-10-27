@@ -290,22 +290,38 @@ inline u32 noise_hash(u32 value) {
     return value ^ (value >> 16);
 }
 
-inline i32 noise_word(u32 value) {
-    // Hashing yields a deterministic bipolar value without an audio-rate
-    // random state update. double_half restores full Q31 range safely.
-    return double_half(static_cast<i32>(noise_hash(value) >> 1) - 1073741823);
-}
+// A fixed 64-cell pseudo-random wavetable. It is the former hash sequence
+// evaluated once at compile time rather than twice per audio sample. The
+// table stays shared and a per-voice phase offset below supplies variation.
+const i32 kDigitalNoiseTable[] = {
+    -2147483647, -2114132652, -2064067936, -1886642754,
+    -341466792, -2055227398, -559613112, 292791780,
+    -520890164, -1559266550, -669696742, -316948786,
+    -1276414438, 1570947414, 1439743220, 1417859292,
+    -1398364738, -1011888488, -234295532, 1691492540,
+    1260504264, -512623470, 1898904130, -837984232,
+    2110782926, 734940004, -2007354952, 459918200,
+    2084235684, -2133489276, -91826754, 2108317726,
+    689255546, -1834552556, -431041502, -941684192,
+    395450224, -906336860, 1202122230, 1965555650,
+    -242614832, -1552549490, -2049515594, -1425301268,
+    1678423788, -1996307396, 110174734, 744383666,
+    -1227818240, -1017496186, -369794408, 222648748,
+    -1867226258, -398399084, 1162039178, 411721560,
+    2020922182, 396122700, -233120524, -86194272,
+    -447124148, -1371891514, 1687727172, -290595820,
+};
+static_assert(sizeof(kDigitalNoiseTable) / sizeof(kDigitalNoiseTable[0]) == 64,
+              "Digital noise table must have 64 cells");
 
-// A 64-cell pseudo-random wavetable, interpolated so its grain is continuous.
-// Because phase wraps, the waveform (and therefore every overtone it adds)
-// repeats at the played fundamental instead of behaving as white noise.
-inline i32 tuned_noise(u32 phase, u32 seed) {
+// Interpolation keeps the grain continuous. Because phase wraps, the
+// waveform (and therefore every overtone it adds) repeats at the played
+// fundamental instead of behaving as white noise.
+inline i32 tuned_noise(u32 phase) {
     const u32 cell = phase >> 26;
     const u32 next = (cell + 1u) & 63u;
     const i32 fraction = static_cast<i32>((phase & 0x03ffffffu) << 5);
-    const i32 first = noise_word(seed ^ (cell * 0x9e3779b9u));
-    const i32 second = noise_word(seed ^ (next * 0x9e3779b9u));
-    return blend(first, second, fraction);
+    return blend(kDigitalNoiseTable[cell], kDigitalNoiseTable[next], fraction);
 }
 
 template <bool Classic>
@@ -340,7 +356,7 @@ struct DigitalTexture<false> {
         }
         --voice.noise_count;
         const i32 white = multiply(half(voice.held_noise), amount);
-        const i32 pitched = multiply(half(tuned_noise(phase, voice.noise_seed)), amount);
+        const i32 pitched = multiply(half(tuned_noise(phase + voice.noise_phase_offset)), amount);
         return blend(white, pitched, kPitchNoiseMix);
     }
 
@@ -365,7 +381,7 @@ inline i32 digitalize(Voice& voice, i32 signal, i32 amount, u32 phase) {
 void start(Voice& voice, Shared&, u32 owner) {
     voice.main_phase = voice.sub_phase = voice.ring_phase = 0;
     voice.random = 0x6d2b79f5u ^ (owner * 0x9e3779b9u);
-    voice.noise_seed = noise_hash(voice.random ^ 0xa511e9b3u);
+    voice.noise_phase_offset = noise_hash(voice.random ^ 0xa511e9b3u);
     voice.noise_count = 0;
     voice.held_noise = 0;
     voice.controls_ready = 0;

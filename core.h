@@ -10,7 +10,10 @@ struct Voice {
     opxy::u32 sub_phase;
     opxy::u32 ring_phase;
     opxy::u32 random;
-    opxy::u32 noise_seed;
+    // A stable rotation through the shared Digital noise table. Keeping the
+    // table immutable takes hashing out of the audio-rate path while giving
+    // each voice its own pitch-locked texture.
+    opxy::u32 noise_phase_offset;
     opxy::u32 noise_count;
     opxy::i32 held_noise;
     opxy::i32 controls[4];
