@@ -2,8 +2,9 @@
 
 This repository holds breadboard (`breadboard`). The machine is at the repository root.
 Read README.md and use the [Open-XY SDK](https://github.com/etcetc000/open-xy)
-on `staging`, normally checked out beside this repository as `../open-xy`.
-Adjust that path if the user already has the SDK elsewhere.
+at commit `33b8652d12be95f7b693ea3b5e2ddb86ed2c4e82`, the stable SDK 1.2 /
+OP-XY OS 1.2.0 profile. It is checked out beside this repository as
+`../open-xy-1.2.0`; adjust that path if the user keeps it elsewhere.
 
 1. Read the [machine API](https://github.com/etcetc000/open-xy/blob/staging/docs/api.md),
    follow the [UX conventions](https://github.com/etcetc000/open-xy/blob/staging/docs/ux.md)
@@ -13,7 +14,8 @@ Adjust that path if the user already has the SDK elsewhere.
    user's implementation. Preserve licences and attribution when reusing code.
 2. Implement through public `<opxy/...>` headers. Keep code, metadata, artwork
    and sound tests here. Do not edit the SDK to make the machine work; explain
-   missing interfaces and propose a separate SDK PR against `staging`.
+   missing interfaces and propose a separate SDK PR against the matching SDK
+   release branch.
    Contributor code has no assembly, raw firmware addresses, OS headers or
    platform conditionals. Audio callbacks must not allocate, block, log, do I/O
    or call graphics.

@@ -6,8 +6,8 @@ on:
 permissions:
   contents: read
 env:
-  # Development follows staging; pin a compatible SDK commit for a release.
-  OPEN_XY_REF: staging
+  # Breadboard targets the stable SDK 1.2 / OP-XY OS 1.2.0 profile.
+  OPEN_XY_REF: 33b8652d12be95f7b693ea3b5e2ddb86ed2c4e82
 jobs:
   machine:
     runs-on: ubuntu-latest
