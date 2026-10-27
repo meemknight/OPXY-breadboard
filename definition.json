@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "id": "breadboard",
+  "name": "breadboard",
+  "parameters": [
+    {
+      "id": "wave_shape",
+      "label": "W Shaper",
+      "default": 0.25,
+      "mapping": {"kind": "linear", "minimum": 0, "maximum": 1},
+      "display": "percent"
+    },
+    {
+      "id": "octave",
+      "label": "Octave",
+      "default": 0.5,
+      "mapping": {"kind": "enum", "labels": ["-3", "-2", "-1", "0", "+1", "+2", "+3"]},
+      "display": "enum"
+    },
+    {
+      "id": "detune_rm",
+      "label": "DetuneRM",
+      "default": 0.5,
+      "mapping": {"kind": "linear", "minimum": -1, "maximum": 1},
+      "display": "bipolar"
+    },
+    {
+      "id": "digitalness",
+      "label": "Digital",
+      "default": 0.08,
+      "mapping": {"kind": "linear", "minimum": 0, "maximum": 1},
+      "display": "percent"
+    }
+  ],
+  "presets": {
+    "Clean": {"wave_shape": 0.12, "octave": 0.5, "detune_rm": 0.5, "digitalness": 0.02},
+    "Chord": {"wave_shape": 0.48, "octave": 0.6666666666666666, "detune_rm": 0.2, "digitalness": 0.1},
+    "Fifth": {"wave_shape": 0.32, "octave": 0.5, "detune_rm": 0.1, "digitalness": 0.05},
+    "Ring": {"wave_shape": 0.65, "octave": 0.5, "detune_rm": 0.94, "digitalness": 0.18},
+    "Noise": {"wave_shape": 0.9, "octave": 0.16666666666666666, "detune_rm": 0.99, "digitalness": 0.86}
+  },
+  "resources": {
+    "voiceBytes": 48,
+    "voiceAlignment": 4,
+    "voiceCapacity": 256,
+    "sharedBytes": 0,
+    "outputPeakQ31": 671088640,
+    "display": {
+      "stateBytes": 16,
+      "stateAlignment": 4,
+      "paths": 0,
+      "points": 0,
+      "nodes": 64,
+      "texts": 0,
+      "palette": 7
+    }
+  }
+}

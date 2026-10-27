@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "sdk": "1.2",
+  "kind": "synth",
+  "description": "A raw dual-oscillator breadboard synth with wave shaping, octave-shifted sub, ring modulation and noisy digital character.",
+  "icon": "M5 36C12 15 20 15 28 36S43 57 41 35M8 41H42M12 28H38",
+  "identity": {
+    "engine": 5,
+    "page": 85
+  }
+}
