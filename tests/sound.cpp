@@ -17,8 +17,8 @@ int main() {
         breadboard::render(voice, shared, 1, output, parameters, pitch);
         for (unsigned i = 0; i < opxy::block_frames; ++i) {
             sounding = sounding || output[i] != 0;
-            // definition.json declares outputPeakQ31: 671088640.
-            bounded = bounded && output[i] >= -671088640 && output[i] <= 671088640;
+            // definition.json declares the low-W-Shaper/low-octave peak.
+            bounded = bounded && output[i] >= -2093796556 && output[i] <= 2093796556;
         }
     }
     // The optimization must remain a cache of the existing exact arithmetic.
@@ -57,7 +57,7 @@ int main() {
                 for (unsigned i = 0; i < opxy::block_frames; ++i) {
                     endpoint_sounding = endpoint_sounding || output[i] != 0;
                     endpoints_bounded = endpoints_bounded &&
-                        output[i] >= -671088640 && output[i] <= 671088640;
+                        output[i] >= -2093796556 && output[i] <= 2093796556;
                 }
             }
             endpoints_sound = endpoints_sound && endpoint_sounding;

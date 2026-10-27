@@ -13,6 +13,33 @@ static_assert(BREADBOARD_CLASSIC_DETUNE_RM == 0 || BREADBOARD_CLASSIC_DETUNE_RM 
 static_assert(BREADBOARD_CLASSIC_WHITE_NOISE == 0 || BREADBOARD_CLASSIC_WHITE_NOISE == 1,
               "BREADBOARD_CLASSIC_WHITE_NOISE must be 0 or 1");
 
+// Set to 1 to restore interpolation between Digital noise-table cells. The
+// default keeps the deliberately noisy table stepped, saving two audio-rate
+// Q31 multiplies per voice sample.
+#define BREADBOARD_INTERPOLATED_DIGITAL_TABLE 0
+static_assert(BREADBOARD_INTERPOLATED_DIGITAL_TABLE == 0 || BREADBOARD_INTERPOLATED_DIGITAL_TABLE == 1,
+              "BREADBOARD_INTERPOLATED_DIGITAL_TABLE must be 0 or 1");
+
+// Set to 0 to restore the Wave Shaper on the hidden ring-modulator source.
+// The default triangle keeps the audible main and sub oscillators unchanged
+// while making the metallic sideband source much cheaper to render.
+#define BREADBOARD_FAST_RING_SOURCE 1
+static_assert(BREADBOARD_FAST_RING_SOURCE == 0 || BREADBOARD_FAST_RING_SOURCE == 1,
+              "BREADBOARD_FAST_RING_SOURCE must be 0 or 1");
+
+// Set to 0 to restore the Wave Shaper on the hidden phase-modulated carrier.
+// The default triangle retains the PM/ring bell structure with much less work.
+#define BREADBOARD_FAST_RING_CARRIER 1
+static_assert(BREADBOARD_FAST_RING_CARRIER == 0 || BREADBOARD_FAST_RING_CARRIER == 1,
+              "BREADBOARD_FAST_RING_CARRIER must be 0 or 1");
+
+// The phase-modulated carrier is the bell-like metallic layer. Set this to 1
+// to add the former true ring-product edge on top; the default keeps the
+// metallic harmonic motion at substantially lower CPU cost.
+#define BREADBOARD_RING_PRODUCT 0
+static_assert(BREADBOARD_RING_PRODUCT == 0 || BREADBOARD_RING_PRODUCT == 1,
+              "BREADBOARD_RING_PRODUCT must be 0 or 1");
+
 namespace breadboard {
 namespace {
 using opxy::i32;
@@ -23,10 +50,19 @@ using opxy::q31::multiply;
 
 const u32 kNyquistIncrement = 0x7fffffffu;
 const i32 kCenter = 1073741823;
-const i32 kOutputLevel = 603979776;  // 0.28125, leaving stock mix headroom.
+const i32 kOutputLevel = 1181116006;  // 0.55 base level; boosted modes stay ceiling-limited.
+const i32 kLowShapeOutputBoost = 1610612735; // Up to 75% extra gain at W Shaper 0%.
+const i32 kOutputGainCeiling = 2093796556;  // 97.5%, avoid full-scale clipping.
+const i32 kLowOctaveOutputBoosts[] = {
+    644245094, // -3: 30%
+    429496729, // -2: 20%
+    214748365, // -1: 10%
+};
 const i32 kPitchNoiseMix = 644245094; // 30% pitched grain, 70% moving noise.
-const i32 kDigitalMaxLevel = 1825361100; // 85% at maximum hybrid Digital.
+const i32 kDigitalMaxLevel = 1717986918; // 80% at maximum hybrid Digital.
+const i32 kPitchedDigitalThreshold = 268435456; // 12.5%: full hybrid above this point.
 const i32 kHighOctaveSubMixStep = 107374182; // Reach 65% sub at +3 octaves.
+const i32 kLowOctaveSubMixStep = 178956970; // Reach 75% sub at -3 octaves.
 
 inline i32 normalized(i32 value) {
     return value < 0 ? 0 : value > maximum ? maximum : value;
@@ -85,10 +121,16 @@ inline u32 octave_increment(u32 increment, unsigned index) {
 }
 
 inline i32 sub_mix_for_octave(unsigned index) {
-    // Keep negative octaves and unison balanced. Higher octave sub voices
-    // need a little more presence to remain audible over the main oscillator.
-    if (index <= 3) return half(maximum);
+    // A low-octave sub has less perceived loudness than the carrier, so give
+    // it a gradual presence lift below unison. Higher octave settings retain
+    // their existing smaller lift to stay audible over the main oscillator.
+    if (index < 3) return half(maximum) + static_cast<i32>(3 - index) * kLowOctaveSubMixStep;
+    if (index == 3) return half(maximum);
     return half(maximum) + static_cast<i32>(index - 3) * kHighOctaveSubMixStep;
+}
+
+inline i32 output_boost_for_octave(unsigned index) {
+    return index < 3 ? kLowOctaveOutputBoosts[index] : 0;
 }
 
 inline i32 center_distance(i32 control) {
@@ -216,66 +258,6 @@ inline u32 cached_ratio_increment(Voice& voice, u32 increment, Ratio ratio) {
     return result;
 }
 
-template <bool Classic>
-struct DetuneRing;
-
-template <>
-struct DetuneRing<true> {
-    static inline u32 increment(Voice&, u32 base_sub, i32 distance, i32, bool ring_side) {
-        return detuned_increment(base_sub, distance, ring_side);
-    }
-
-    static inline i32 mix(i32 main, i32 sub, u32, u32, i32, i32 sub_mix,
-                          i32 distance, bool ring_side, i32, i32) {
-        const i32 sub_signal = ring_side ? blend(sub, multiply(main, sub), distance) : sub;
-        return blend(main, sub_signal, sub_mix);
-    }
-};
-
-template <>
-struct DetuneRing<false> {
-    static inline u32 increment(Voice& voice, u32 base_sub, i32 distance, i32 ring_depth, bool ring_side) {
-        // The right half leaves the played carrier pitch untouched. Its
-        // internal modulator is consonant through 85% of the range, then
-        // steps through inharmonic bell ratios only near the extreme.
-        if (ring_side) {
-            // Do not retune the hidden modulator until it can be heard. This
-            // makes 1% (and the complete dead zone) genuinely indistinguishable
-            // from centre rather than a quiet off-key sub oscillator.
-            if (!ring_depth) return base_sub;
-            return cached_ratio_increment(voice, base_sub, right_ring_ratio(distance));
-        }
-        const unsigned ratio_count = sizeof(kDetuneRatios) / sizeof(kDetuneRatios[0]);
-        return cached_ratio_increment(voice, base_sub, kDetuneRatios[ratio_position(distance, ratio_count)]);
-    }
-
-    static inline i32 mix(i32 main, i32 sub, u32 main_phase, u32 sub_phase,
-                          i32 shape, i32 sub_mix, i32, bool ring_side,
-                          i32 ring_depth, i32 extension) {
-        const i32 dry_pair = blend(main, sub, sub_mix);
-        // The modulator feeds both a phase-modulated carrier and a true ring
-        // product.  Phase modulation supplies the bell-like sideband stack;
-        // the product supplies the sharp metallic edge.  Every blend is
-        // bounded, keeping the output peak contract intact.
-        const i32 ring_source = shaped_wave(sub_phase + 0x40000000u, shape);
-        const i32 phase_depth = saturating_positive_add(
-            multiply(ring_depth, kMusicalPhaseDepth), multiply(extension, kBellExtraPhaseDepth));
-        const i32 phase_q31 = multiply(ring_source, phase_depth);
-        const u32 phase_offset = static_cast<u32>(phase_q31) << 1;
-        const i32 bell_carrier = shaped_wave(main_phase + phase_offset, half(shape));
-        const i32 ring_product = multiply(bell_carrier, ring_source);
-        const i32 ring_amount = blend(kMusicalRingAmount, kBellExtremeRingAmount, extension);
-        const i32 metallic = blend(bell_carrier, ring_product, ring_amount);
-        const i32 voice_amount = blend(kMusicalVoiceAmount, kBellExtremeVoiceAmount, extension);
-        const i32 ring_voice = blend(main, metallic, voice_amount);
-        // Keep the octave-shifted sub outside the ring crossfade.  Its level
-        // is therefore exactly the same at every positive DetuneRM position;
-        // only the carrier portion becomes increasingly metallic.
-        const i32 ring_carrier = blend(main, ring_voice, ring_depth);
-        return ring_side ? blend(ring_carrier, sub, sub_mix) : dry_pair;
-    }
-};
-
 inline void smooth(i32& current, i32 target) {
     const i32 difference = target - current;
     const i32 step = difference / 64;
@@ -314,11 +296,14 @@ const i32 kDigitalNoiseTable[] = {
 static_assert(sizeof(kDigitalNoiseTable) / sizeof(kDigitalNoiseTable[0]) == 64,
               "Digital noise table must have 64 cells");
 
-// Interpolation keeps the grain continuous. Because phase wraps, the
-// waveform (and therefore every overtone it adds) repeats at the played
-// fundamental instead of behaving as white noise.
+// Because phase wraps, this waveform (and therefore every overtone it adds)
+// repeats at the played fundamental instead of behaving as white noise. The
+// stepped default is appropriate for Digital's deliberately grainy texture;
+// interpolation remains available above for softer variants.
 inline i32 tuned_noise(u32 phase) {
     const u32 cell = phase >> 26;
+    if (!BREADBOARD_INTERPOLATED_DIGITAL_TABLE)
+        return kDigitalNoiseTable[cell];
     const u32 next = (cell + 1u) & 63u;
     const i32 fraction = static_cast<i32>((phase & 0x03ffffffu) << 5);
     return blend(kDigitalNoiseTable[cell], kDigitalNoiseTable[next], fraction);
@@ -355,9 +340,18 @@ struct DigitalTexture<false> {
             voice.noise_count = 1u + (static_cast<u32>(maximum - amount) >> 28);
         }
         --voice.noise_count;
-        const i32 white = multiply(half(voice.held_noise), amount);
-        const i32 pitched = multiply(half(tuned_noise(phase + voice.noise_phase_offset)), amount);
-        return blend(white, pitched, kPitchNoiseMix);
+        // At very small amounts the moving grain is already the audible
+        // feature. Skip the two extra operations for the pitched layer until
+        // Digital is high enough for that harmonic centre to be meaningful.
+        if (amount < kPitchedDigitalThreshold)
+            return multiply(half(voice.held_noise), amount);
+        // Blend sources before applying amount. This is equivalent to
+        // scaling each source then blending, apart from inaudible Q31
+        // rounding, and removes one audio-rate multiply in full Digital.
+        const i32 mixed_noise = blend(voice.held_noise,
+                                      tuned_noise(phase + voice.noise_phase_offset),
+                                      kPitchNoiseMix);
+        return multiply(half(mixed_noise), amount);
     }
 
     static inline i32 output_gain(i32 amount) {
@@ -365,26 +359,28 @@ struct DigitalTexture<false> {
     }
 };
 
-inline i32 digitalize(Voice& voice, i32 signal, i32 amount, u32 phase) {
+inline i32 digitalize(Voice& voice, i32 signal, i32 amount, u32 phase, u32 bit_mask) {
     typedef DigitalTexture<(BREADBOARD_CLASSIC_WHITE_NOISE != 0)> DigitalTextureMode;
     const i32 grain = DigitalTextureMode::grain(voice, amount, phase);
     const i32 combined = half(signal) + half(grain);
-    // Symmetric cubic folding curve: it adds dense harmonics without an
-    // unbounded hard clip and stays within Q31 for every input.
-    const i32 cubic = multiply(multiply(combined, combined), combined);
-    const i32 folded = combined - half(cubic);
-    const unsigned discarded = static_cast<u32>(amount) >> 26;
-    return static_cast<i32>(static_cast<u32>(folded) & (0xffffffffu << discarded));
+    // A symmetric one-multiply soft fold keeps Digital's dense, compressed
+    // texture while replacing the former two-multiply cubic curve. combined
+    // is already bounded above INT32_MIN, so its magnitude is safe to take.
+    const i32 magnitude = combined < 0 ? -combined : combined;
+    const i32 folded = combined - half(multiply(combined, magnitude));
+    return static_cast<i32>(static_cast<u32>(folded) & bit_mask);
 }
 
 // Parameters are normally stationary for many audio blocks. Keep the original
 // sample-smoothed path below for an actively moving control, but prepare the
 // steady-state decisions once here instead of repeating control decoding,
 // octave selection and output-gain work 64 times per block.
-inline void render_steady(Voice& voice, opxy::Output output, opxy::Pitch pitch) {
+inline void render_steady(Voice& voice, opxy::Output output, opxy::Pitch pitch,
+                          unsigned first_frame, unsigned frame_count) {
     const i32 shape = voice.controls[0];
     const i32 detune = voice.controls[2];
     const i32 digital_amount = voice.controls[3];
+    const u32 digital_bit_mask = 0xffffffffu << (static_cast<u32>(digital_amount) >> 26);
     const i32 distance = center_distance(detune);
     const bool neutral_detune = distance <= kNeutralDetuneRange;
     const bool ring_side = detune > kCenter && !neutral_detune;
@@ -396,17 +392,32 @@ inline void render_steady(Voice& voice, opxy::Output output, opxy::Pitch pitch) 
     typedef DigitalTexture<(BREADBOARD_CLASSIC_WHITE_NOISE != 0)> DigitalTextureMode;
     // Combining these two fixed gains removes one Q31 multiply from every
     // steady sample. The tiny rounding difference is below audible level.
-    const i32 output_gain = multiply(DigitalTextureMode::output_gain(digital_amount), kOutputLevel);
+    const i32 base_output_gain = multiply(DigitalTextureMode::output_gain(digital_amount), kOutputLevel);
+    // The rounded low-W-Shaper waveform has less perceived body than its
+    // sharper settings. Apply a gentle, control-rate quadratic lift that
+    // reaches 75% at 0% W Shaper and vanishes at 100%.
+    const i32 low_shape = maximum - normalized(shape);
+    const i32 low_shape_squared = multiply(low_shape, low_shape);
+    const i32 shape_boost = multiply(base_output_gain,
+                                     multiply(low_shape_squared, kLowShapeOutputBoost));
+    const i32 shaped_output_gain = base_output_gain + shape_boost;
+    // Subs need extra perceived loudness. This is also control-rate work and
+    // reaches +30% only at octave -3.
+    const i32 octave_boost = output_boost_for_octave(octave);
+    const i32 octave_lift = multiply(shaped_output_gain, octave_boost);
+    const i32 output_gain = shaped_output_gain >= kOutputGainCeiling - octave_lift
+                                ? kOutputGainCeiling
+                                : shaped_output_gain + octave_lift;
 
     // At neutral DetuneRM and unison octave the two oscillators have identical
     // phase, increment and shape. Rendering the second copy then crossfading
     // it cannot add sound, so render the carrier once while preserving all
     // phase state for a later parameter change.
     if (neutral_detune && octave == 3) {
-        for (unsigned i = 0; i < opxy::block_frames; ++i) {
+        for (unsigned i = first_frame; i < first_frame + frame_count; ++i) {
             const u32 increment = pitch[i] > kNyquistIncrement ? kNyquistIncrement : pitch[i];
             const i32 main = shaped_wave(voice.main_phase, shape);
-            const i32 digital = digitalize(voice, main, digital_amount, voice.main_phase);
+            const i32 digital = digitalize(voice, main, digital_amount, voice.main_phase, digital_bit_mask);
             output[i] = multiply(digital, output_gain);
             voice.main_phase += increment;
             voice.sub_phase += increment;
@@ -421,8 +432,27 @@ inline void render_steady(Voice& voice, opxy::Output output, opxy::Pitch pitch) 
         selected_ratio = ring_side ? right_ring_ratio(distance)
                                    : kDetuneRatios[ratio_position(distance, ratio_count)];
     }
+    // These three values depend only on a steady control position. The old
+    // ring path rebuilt them in every sample even though no input to them can
+    // change until the next block.
+    i32 ring_phase_depth = 0, ring_amount = 0, ring_voice_amount = 0, ring_wet_amount = 0;
+    i32 unison_ring_wet = 0;
+    if (ring_side && !BREADBOARD_CLASSIC_DETUNE_RM) {
+        ring_phase_depth = saturating_positive_add(
+            multiply(bell_depth, kMusicalPhaseDepth),
+            multiply(bell_extension, kBellExtraPhaseDepth));
+        ring_amount = blend(kMusicalRingAmount, kBellExtremeRingAmount, bell_extension);
+        ring_voice_amount = blend(kMusicalVoiceAmount, kBellExtremeVoiceAmount, bell_extension);
+        // blend(main, blend(main, metallic, voice), depth) is the same
+        // crossfade shape as blend(main, metallic, depth * voice), apart
+        // from one less rounding step. Calculate its fixed amount once.
+        ring_wet_amount = multiply(bell_depth, ring_voice_amount);
+        // The unison mix is also a fixed control-derived coefficient; keeping
+        // it out of the 64-sample loop avoids a redundant Q31 multiply.
+        if (octave == 3) unison_ring_wet = multiply(ring_wet_amount, maximum - sub_mix);
+    }
 
-    for (unsigned i = 0; i < opxy::block_frames; ++i) {
+    for (unsigned i = first_frame; i < first_frame + frame_count; ++i) {
         const u32 main_increment = pitch[i] > kNyquistIncrement ? kNyquistIncrement : pitch[i];
         const u32 base_sub = octave_increment(main_increment, octave);
         u32 modulator_increment = base_sub;
@@ -435,16 +465,44 @@ inline void render_steady(Voice& voice, opxy::Output output, opxy::Pitch pitch) 
                                       ? modulator_increment
                                       : base_sub;
         const i32 main = shaped_wave(voice.main_phase, shape);
-        const i32 sub = shaped_wave(voice.sub_phase, shape);
-        i32 pair = blend(main, sub, sub_mix);
+        i32 pair = main;
         if (ring_side) {
-            typedef DetuneRing<(BREADBOARD_CLASSIC_DETUNE_RM != 0)> DetuneRingMode;
-            const u32 modulator_phase = BREADBOARD_CLASSIC_DETUNE_RM ? voice.sub_phase : voice.ring_phase;
-            pair = DetuneRingMode::mix(main, sub, voice.main_phase, modulator_phase,
-                                       shape, sub_mix, distance, ring_side,
-                                       bell_depth, bell_extension);
+            if (BREADBOARD_CLASSIC_DETUNE_RM) {
+                const i32 sub = shaped_wave(voice.sub_phase, shape);
+                const i32 sub_signal = blend(sub, multiply(main, sub), distance);
+                pair = blend(main, sub_signal, sub_mix);
+            } else {
+                const u32 ring_phase = voice.ring_phase + 0x40000000u;
+                const i32 ring_source = BREADBOARD_FAST_RING_SOURCE ? triangle(ring_phase)
+                                                                      : shaped_wave(ring_phase, shape);
+                const i32 phase_q31 = multiply(ring_source, ring_phase_depth);
+                const u32 phase_offset = static_cast<u32>(phase_q31) << 1;
+                const u32 bell_phase = voice.main_phase + phase_offset;
+                const i32 bell_carrier = BREADBOARD_FAST_RING_CARRIER ? triangle(bell_phase)
+                                                                        : shaped_wave(bell_phase, half(shape));
+                // Phase modulation alone supplies a stable, bell-like metal
+                // spectrum. The optional product adds a rougher edge but
+                // needs another multiply and crossfade at every sample.
+                i32 metallic = bell_carrier;
+                if (BREADBOARD_RING_PRODUCT) {
+                    const i32 ring_product = multiply(bell_carrier, ring_source);
+                    metallic = blend(bell_carrier, ring_product, ring_amount);
+                }
+                if (octave == 3) {
+                    // In unison the audible sub is exactly main, so fold the
+                    // outer sub mix into the metallic crossfade and skip it.
+                    pair = blend(main, metallic, unison_ring_wet);
+                } else {
+                    const i32 sub = shaped_wave(voice.sub_phase, shape);
+                    const i32 ring_carrier = blend(main, metallic, ring_wet_amount);
+                    pair = blend(ring_carrier, sub, sub_mix);
+                }
+            }
+        } else {
+            const i32 sub = shaped_wave(voice.sub_phase, shape);
+            pair = blend(main, sub, sub_mix);
         }
-        const i32 digital = digitalize(voice, pair, digital_amount, voice.main_phase);
+        const i32 digital = digitalize(voice, pair, digital_amount, voice.main_phase, digital_bit_mask);
         output[i] = multiply(digital, output_gain);
         voice.main_phase += main_increment;
         voice.sub_phase += sub_increment;
@@ -482,44 +540,21 @@ void render(Voice& voice, Shared&, u32, opxy::Output output,
     for (unsigned control = 0; control < 4; ++control)
         controls_steady = controls_steady && voice.controls[control] == targets[control];
     if (controls_steady) {
-        render_steady(voice, output, pitch);
+        render_steady(voice, output, pitch, 0, opxy::block_frames);
         return;
     }
 
-    for (unsigned i = 0; i < opxy::block_frames; ++i) {
-        for (unsigned control = 0; control < 4; ++control) smooth(voice.controls[control], targets[control]);
-        const u32 main_increment = pitch[i] > kNyquistIncrement ? kNyquistIncrement : pitch[i];
-        const i32 detune = voice.controls[2];
-        const i32 distance = center_distance(detune);
-        const bool neutral_detune = distance <= kNeutralDetuneRange;
-        const bool ring_side = detune > kCenter && !neutral_detune;
-        const i32 active_distance = neutral_detune ? 0 : distance;
-        const i32 bell_depth = ring_side ? ring_depth(distance) : 0;
-        const i32 bell_extension = ring_side ? ring_extension(distance) : 0;
-        const unsigned octave = octave_index(voice.controls[1]);
-        const u32 base_sub = octave_increment(main_increment, octave);
-        const i32 sub_mix = sub_mix_for_octave(octave);
-        const i32 main = shaped_wave(voice.main_phase, voice.controls[0]);
-        typedef DetuneRing<(BREADBOARD_CLASSIC_DETUNE_RM != 0)> DetuneRingMode;
-        const u32 modulator_increment = DetuneRingMode::increment(voice, base_sub, active_distance, bell_depth, ring_side);
-        // On the left, this remains the audible detuned sub. Once the right
-        // side engages, Octave advances its own audible sub oscillator while
-        // ring modulation uses an independent phase, so no positive setting
-        // can make Octave appear to stop.
-        const u32 sub_increment = (BREADBOARD_CLASSIC_DETUNE_RM || !ring_side)
-                                      ? modulator_increment
-                                      : base_sub;
-        const u32 modulator_phase = BREADBOARD_CLASSIC_DETUNE_RM ? voice.sub_phase : voice.ring_phase;
-        const i32 sub = shaped_wave(voice.sub_phase, voice.controls[0]);
-        const i32 pair = DetuneRingMode::mix(main, sub, voice.main_phase, modulator_phase,
-                                              voice.controls[0], sub_mix, distance, ring_side,
-                                              bell_depth, bell_extension);
-        typedef DigitalTexture<(BREADBOARD_CLASSIC_WHITE_NOISE != 0)> DigitalTextureMode;
-        const i32 digital = digitalize(voice, pair, voice.controls[3], voice.main_phase);
-        output[i] = multiply(multiply(digital, DigitalTextureMode::output_gain(voice.controls[3])), kOutputLevel);
-        voice.main_phase += main_increment;
-        voice.sub_phase += sub_increment;
-        voice.ring_phase += modulator_increment;
+    // The former control-motion renderer rebuilt the most expensive ring
+    // algorithm for every sample, unlike the normal steady path. Move the
+    // same one-pole controls in short slices instead: each slice uses the
+    // optimized renderer and keeps oscillator phases continuous.
+    const unsigned control_frames = 8;
+    for (unsigned first_frame = 0; first_frame < opxy::block_frames;
+         first_frame += control_frames) {
+        for (unsigned step = 0; step < control_frames; ++step)
+            for (unsigned control = 0; control < 4; ++control)
+                smooth(voice.controls[control], targets[control]);
+        render_steady(voice, output, pitch, first_frame, control_frames);
     }
 }
 }  // namespace breadboard
