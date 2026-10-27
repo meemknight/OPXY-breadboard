@@ -40,9 +40,9 @@
     "Noise": {"wave_shape": 0.9, "octave": 0.16666666666666666, "detune_rm": 0.99, "digitalness": 0.86}
   },
   "resources": {
-    "voiceBytes": 48,
+    "voiceBytes": 64,
     "voiceAlignment": 4,
-    "voiceCapacity": 256,
+    "voiceCapacity": 8,
     "sharedBytes": 0,
     "outputPeakQ31": 671088640,
     "display": {

@@ -197,12 +197,31 @@ inline u32 ratio_increment(u32 increment, Ratio ratio) {
                : scaled_whole + scaled_remainder;
 }
 
+inline u32 ratio_key(Ratio ratio) {
+    return (ratio.numerator << 16) | ratio.denominator;
+}
+
+// This is deliberately a cache around the exact calculation above, not an
+// approximation. A changed pitch increment or ratio always takes the original
+// path, so the audible result is bit-identical to the uncached implementation.
+inline u32 cached_ratio_increment(Voice& voice, u32 increment, Ratio ratio) {
+    const u32 key = ratio_key(ratio);
+    if (voice.ratio_cache_valid && voice.ratio_cache_increment == increment &&
+        voice.ratio_cache_key == key) return voice.ratio_cache_result;
+    const u32 result = ratio_increment(increment, ratio);
+    voice.ratio_cache_increment = increment;
+    voice.ratio_cache_key = key;
+    voice.ratio_cache_result = result;
+    voice.ratio_cache_valid = 1;
+    return result;
+}
+
 template <bool Classic>
 struct DetuneRing;
 
 template <>
 struct DetuneRing<true> {
-    static inline u32 increment(u32 base_sub, i32 distance, i32, bool ring_side) {
+    static inline u32 increment(Voice&, u32 base_sub, i32 distance, i32, bool ring_side) {
         return detuned_increment(base_sub, distance, ring_side);
     }
 
@@ -215,7 +234,7 @@ struct DetuneRing<true> {
 
 template <>
 struct DetuneRing<false> {
-    static inline u32 increment(u32 base_sub, i32 distance, i32 ring_depth, bool ring_side) {
+    static inline u32 increment(Voice& voice, u32 base_sub, i32 distance, i32 ring_depth, bool ring_side) {
         // The right half leaves the played carrier pitch untouched. Its
         // internal modulator is consonant through 85% of the range, then
         // steps through inharmonic bell ratios only near the extreme.
@@ -224,10 +243,10 @@ struct DetuneRing<false> {
             // makes 1% (and the complete dead zone) genuinely indistinguishable
             // from centre rather than a quiet off-key sub oscillator.
             if (!ring_depth) return base_sub;
-            return ratio_increment(base_sub, right_ring_ratio(distance));
+            return cached_ratio_increment(voice, base_sub, right_ring_ratio(distance));
         }
         const unsigned ratio_count = sizeof(kDetuneRatios) / sizeof(kDetuneRatios[0]);
-        return ratio_increment(base_sub, kDetuneRatios[ratio_position(distance, ratio_count)]);
+        return cached_ratio_increment(voice, base_sub, kDetuneRatios[ratio_position(distance, ratio_count)]);
     }
 
     static inline i32 mix(i32 main, i32 sub, u32 main_phase, u32 sub_phase,
@@ -350,6 +369,7 @@ void start(Voice& voice, Shared&, u32 owner) {
     voice.noise_count = 0;
     voice.held_noise = 0;
     voice.controls_ready = 0;
+    voice.ratio_cache_valid = 0;
 }
 
 void initialize(Voice& voice, Shared& shared, u32 owner) {
@@ -382,7 +402,7 @@ void render(Voice& voice, Shared&, u32, opxy::Output output,
         const i32 sub_mix = sub_mix_for_octave(octave);
         const i32 main = shaped_wave(voice.main_phase, voice.controls[0]);
         typedef DetuneRing<(BREADBOARD_CLASSIC_DETUNE_RM != 0)> DetuneRingMode;
-        const u32 modulator_increment = DetuneRingMode::increment(base_sub, active_distance, bell_depth, ring_side);
+        const u32 modulator_increment = DetuneRingMode::increment(voice, base_sub, active_distance, bell_depth, ring_side);
         // On the left, this remains the audible detuned sub. Once the right
         // side engages, Octave advances its own audible sub oscillator while
         // ring modulation uses an independent phase, so no positive setting

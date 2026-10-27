@@ -15,6 +15,12 @@ struct Voice {
     opxy::i32 held_noise;
     opxy::i32 controls[4];
     opxy::u32 controls_ready;
+    // Memoized exact ratio calculation. Pitch is normally constant across a
+    // block, so this avoids repeating an integer divide for all 64 samples.
+    opxy::u32 ratio_cache_increment;
+    opxy::u32 ratio_cache_key;
+    opxy::u32 ratio_cache_result;
+    opxy::u32 ratio_cache_valid;
 };
 
 struct Shared {};

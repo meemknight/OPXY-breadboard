@@ -22,14 +22,14 @@ static void detune_value(opxy::i32 normalized, char (&text)[8]) {
 }
 
 void display(DisplayState&, const opxy::draw::Input& input, Frame& frame) {
-    // The source artwork is scaled to one fifth inside its SVG group.  Moving
-    // a bound path by 60 source pixels therefore gives a clear twelve-pixel
-    // lift on the 480 x 220 display.  Zero is its drawn (lowest) position.
+    // Artwork coordinates are flattened into the 480 x 220 screen. Preserve
+    // the original twelve-pixel maximum lift now that its former 0.2 SVG
+    // parent transform no longer scales node translations down for us.
     const opxy::i32 lift[4] = {
-        (input.parameters[0] >> 27) * 4 * unit,  // capacitor: W Shaper
-        (input.parameters[1] >> 27) * 4 * unit,  // wire: octave
-        (input.parameters[2] >> 27) * 4 * unit,  // coil: detune_rm
-        (input.parameters[3] >> 27) * 4 * unit   // transistor: Digital
+        (input.parameters[0] >> 27) * 4 * unit / 5,  // capacitor: W Shaper
+        (input.parameters[1] >> 27) * 4 * unit / 5,  // wire: octave
+        (input.parameters[2] >> 27) * 4 * unit / 5,  // coil: detune_rm
+        (input.parameters[3] >> 27) * 4 * unit / 5   // transistor: Digital
     };
     const unsigned first[4] = {0, 17, 18, 27};
     const unsigned count[4] = {17, 1, 9, 10};
