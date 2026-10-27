@@ -376,6 +376,81 @@ inline i32 digitalize(Voice& voice, i32 signal, i32 amount, u32 phase) {
     const unsigned discarded = static_cast<u32>(amount) >> 26;
     return static_cast<i32>(static_cast<u32>(folded) & (0xffffffffu << discarded));
 }
+
+// Parameters are normally stationary for many audio blocks. Keep the original
+// sample-smoothed path below for an actively moving control, but prepare the
+// steady-state decisions once here instead of repeating control decoding,
+// octave selection and output-gain work 64 times per block.
+inline void render_steady(Voice& voice, opxy::Output output, opxy::Pitch pitch) {
+    const i32 shape = voice.controls[0];
+    const i32 detune = voice.controls[2];
+    const i32 digital_amount = voice.controls[3];
+    const i32 distance = center_distance(detune);
+    const bool neutral_detune = distance <= kNeutralDetuneRange;
+    const bool ring_side = detune > kCenter && !neutral_detune;
+    const i32 active_distance = neutral_detune ? 0 : distance;
+    const i32 bell_depth = ring_side ? ring_depth(distance) : 0;
+    const i32 bell_extension = ring_side ? ring_extension(distance) : 0;
+    const unsigned octave = octave_index(voice.controls[1]);
+    const i32 sub_mix = sub_mix_for_octave(octave);
+    typedef DigitalTexture<(BREADBOARD_CLASSIC_WHITE_NOISE != 0)> DigitalTextureMode;
+    // Combining these two fixed gains removes one Q31 multiply from every
+    // steady sample. The tiny rounding difference is below audible level.
+    const i32 output_gain = multiply(DigitalTextureMode::output_gain(digital_amount), kOutputLevel);
+
+    // At neutral DetuneRM and unison octave the two oscillators have identical
+    // phase, increment and shape. Rendering the second copy then crossfading
+    // it cannot add sound, so render the carrier once while preserving all
+    // phase state for a later parameter change.
+    if (neutral_detune && octave == 3) {
+        for (unsigned i = 0; i < opxy::block_frames; ++i) {
+            const u32 increment = pitch[i] > kNyquistIncrement ? kNyquistIncrement : pitch[i];
+            const i32 main = shaped_wave(voice.main_phase, shape);
+            const i32 digital = digitalize(voice, main, digital_amount, voice.main_phase);
+            output[i] = multiply(digital, output_gain);
+            voice.main_phase += increment;
+            voice.sub_phase += increment;
+            voice.ring_phase += increment;
+        }
+        return;
+    }
+
+    Ratio selected_ratio = {1, 1};
+    if (!neutral_detune && !BREADBOARD_CLASSIC_DETUNE_RM) {
+        const unsigned ratio_count = sizeof(kDetuneRatios) / sizeof(kDetuneRatios[0]);
+        selected_ratio = ring_side ? right_ring_ratio(distance)
+                                   : kDetuneRatios[ratio_position(distance, ratio_count)];
+    }
+
+    for (unsigned i = 0; i < opxy::block_frames; ++i) {
+        const u32 main_increment = pitch[i] > kNyquistIncrement ? kNyquistIncrement : pitch[i];
+        const u32 base_sub = octave_increment(main_increment, octave);
+        u32 modulator_increment = base_sub;
+        if (BREADBOARD_CLASSIC_DETUNE_RM) {
+            modulator_increment = detuned_increment(base_sub, active_distance, ring_side);
+        } else if (!neutral_detune) {
+            modulator_increment = cached_ratio_increment(voice, base_sub, selected_ratio);
+        }
+        const u32 sub_increment = (BREADBOARD_CLASSIC_DETUNE_RM || !ring_side)
+                                      ? modulator_increment
+                                      : base_sub;
+        const i32 main = shaped_wave(voice.main_phase, shape);
+        const i32 sub = shaped_wave(voice.sub_phase, shape);
+        i32 pair = blend(main, sub, sub_mix);
+        if (ring_side) {
+            typedef DetuneRing<(BREADBOARD_CLASSIC_DETUNE_RM != 0)> DetuneRingMode;
+            const u32 modulator_phase = BREADBOARD_CLASSIC_DETUNE_RM ? voice.sub_phase : voice.ring_phase;
+            pair = DetuneRingMode::mix(main, sub, voice.main_phase, modulator_phase,
+                                       shape, sub_mix, distance, ring_side,
+                                       bell_depth, bell_extension);
+        }
+        const i32 digital = digitalize(voice, pair, digital_amount, voice.main_phase);
+        output[i] = multiply(digital, output_gain);
+        voice.main_phase += main_increment;
+        voice.sub_phase += sub_increment;
+        voice.ring_phase += modulator_increment;
+    }
+}
 }  // namespace
 
 void start(Voice& voice, Shared&, u32 owner) {
@@ -401,6 +476,14 @@ void render(Voice& voice, Shared&, u32, opxy::Output output,
     if (!voice.controls_ready) {
         for (unsigned control = 0; control < 4; ++control) voice.controls[control] = targets[control];
         voice.controls_ready = 1;
+    }
+
+    bool controls_steady = true;
+    for (unsigned control = 0; control < 4; ++control)
+        controls_steady = controls_steady && voice.controls[control] == targets[control];
+    if (controls_steady) {
+        render_steady(voice, output, pitch);
+        return;
     }
 
     for (unsigned i = 0; i < opxy::block_frames; ++i) {
