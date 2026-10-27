@@ -26,7 +26,7 @@ const i32 kCenter = 1073741823;
 const i32 kOutputLevel = 603979776;  // 0.28125, leaving stock mix headroom.
 const i32 kPitchNoiseMix = 644245094; // 30% pitched grain, 70% moving noise.
 const i32 kDigitalMaxLevel = 1825361100; // 85% at maximum hybrid Digital.
-const i32 kHighOctaveSubMixStep = 71582788; // Reach 60% sub at +3 octaves.
+const i32 kHighOctaveSubMixStep = 107374182; // Reach 65% sub at +3 octaves.
 
 inline i32 normalized(i32 value) {
     return value < 0 ? 0 : value > maximum ? maximum : value;
