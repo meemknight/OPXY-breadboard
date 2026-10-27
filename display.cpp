@@ -40,8 +40,5 @@ void display(DisplayState&, const opxy::draw::Input& input, Frame& frame) {
     char value[8] = {};
     detune_value(input.parameters[2], value);
     header(frame, 2, value);
-    // These slots remain in the SVG for future artwork, but are intentionally
-    // inactive until an element is assigned their matching node id.
-    for (unsigned node = 37; node < 64; ++node) hide(frame, node);
 }
 }  // namespace breadboard
