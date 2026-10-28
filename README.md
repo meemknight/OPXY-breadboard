@@ -15,19 +15,19 @@ port and contains no Teenage Engineering source, assets or firmware logic.
 
 ## Hardware CPU profiling
 
-Measured on an OP-XY running OS 1.2.0 with the SDK's
+Measured on an OP-XY running OS 1.2.1 with the SDK's
 `opxy-synth-c8-v1` workload: one whole voice at note 60, velocity 127,
 controls 0–3 at midpoint, 1,000 rendered blocks followed by release.
 
 | Run | Mean block budget |
 | --- | ---: |
-| 1 | 2.161% |
-| 2 | 2.142% |
-| 3 | 2.130% |
-| **Median** | **2.142%** |
+| 1 | 2.171% |
+| 2 | 2.170% |
+| 3 | 2.181% |
+| **Median** | **2.171%** |
 
-Measured package: commit `d4cc312`, firmware SHA-256
-`8fadb6e5fe390b8554983eb83399191d773579ca89c9968988c827163e61cb87`.
+Measured package: commit `d9b4b41`, firmware SHA-256
+`e279bff69e22d10570c972e60125127f0ec3a2b476632ed3c971e32e46c538f4`.
 This is a synthetic whole-voice measurement, not a maximum-polyphony or
 live-project utilization claim.
 
