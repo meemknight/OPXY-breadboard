@@ -6,8 +6,8 @@ on:
 permissions:
   contents: read
 env:
-  # Breadboard targets the stable SDK 1.2 / OP-XY OS 1.2.0 profile.
-  OPEN_XY_REF: 33b8652d12be95f7b693ea3b5e2ddb86ed2c4e82
+  # Breadboard targets SDK 1.3 on the stable OP-XY OS 1.2.1 profile.
+  OPEN_XY_REF: c10d61b529521eff48dfcc619cb0d793e602e2eb
 jobs:
   machine:
     runs-on: ubuntu-latest

@@ -2,9 +2,9 @@
 
 This repository holds breadboard (`breadboard`). The machine is at the repository root.
 Read README.md and use the [Open-XY SDK](https://github.com/etcetc000/open-xy)
-at commit `33b8652d12be95f7b693ea3b5e2ddb86ed2c4e82`, the stable SDK 1.2 /
-OP-XY OS 1.2.0 profile. It is checked out beside this repository as
-`../open-xy-1.2.0`; adjust that path if the user keeps it elsewhere.
+at commit `c10d61b529521eff48dfcc619cb0d793e602e2eb`, the stable SDK 1.3 /
+OP-XY OS 1.2.1 profile. It is checked out beside this repository as
+`../open-xy-v0.0.2`; adjust that path if the user keeps it elsewhere.
 
 1. Read the [machine API](https://github.com/etcetc000/open-xy/blob/staging/docs/api.md),
    follow the [UX conventions](https://github.com/etcetc000/open-xy/blob/staging/docs/ux.md)
